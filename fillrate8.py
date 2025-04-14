@@ -1,9 +1,9 @@
 import os
 import requests
+import json
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from urllib.parse import quote
-import json
 
 # Load environment variables from .env
 load_dotenv()
@@ -12,21 +12,22 @@ load_dotenv()
 AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
-encoded_table_name = quote(AIRTABLE_TABLE_NAME)  # URL-encode in case of spaces
+encoded_table_name = quote(AIRTABLE_TABLE_NAME)
 
 # Flxpoint configuration
 FLXPOINT_API_TOKEN = os.getenv("FLXPOINT_API_TOKEN")
 
-# Vendor mapping using provided source IDs:
-vendor_source_ids = {
-    "Muscle Food": 210740,
-    "DNA": 992648
+# OPTIONAL: A mapping from sourceId to vendor name. 
+# Update this mapping if you know the correct IDs.
+source_id_to_vendor = {
+    # Example: if you know that source id 212291 represents DNA:
+    212291: "DNA",
+    # If you later discover Muscle Food appears with a different sourceId, add it here.
 }
-VENDORS = list(vendor_source_ids.keys())
 
 def get_fulfillment_data():
     """
-    Retrieves all fulfillment requests for the past 7 days from Flxpoint.
+    Retrieves all fulfillment requests (for all sources) over the past 7 days.
     """
     headers = {"X-API-TOKEN": FLXPOINT_API_TOKEN}
     today = datetime.utcnow()
@@ -48,11 +49,11 @@ def get_fulfillment_data():
         return []
     
     try:
-        data = response.json()  # Expecting a JSON array
+        data = response.json()  # Expect a JSON array (list)
         print(f"✅ Successfully parsed JSON response (records: {len(data)})")
         if data:
+            # Print a snippet of the first record for inspection.
             print("🔍 Sample record:")
-            # Print a snippet of the first record to check available keys.
             print(json.dumps(data[0], indent=2)[:500])
     except Exception as e:
         print("❌ Failed to parse JSON:", e)
@@ -61,31 +62,48 @@ def get_fulfillment_data():
     
     return data
 
-def compute_vendor_totals(fulfillment_data, vendor):
+def group_fulfillments_by_source(fulfillment_data):
     """
-    For the given vendor, sum the total ordered and shipped quantities.
-    We filter using our vendor_source_ids mapping (matching the record's sourceId).
+    Groups the fulfillment records by their sourceId.
+    Returns a dictionary mapping sourceId to a list of records.
+    """
+    grouped = {}
+    for record in fulfillment_data:
+        source_id = record.get("sourceId")
+        if source_id is None:
+            continue
+        if source_id not in grouped:
+            grouped[source_id] = []
+        grouped[source_id].append(record)
+    print("🗂 Unique source IDs found:", list(grouped.keys()))
+    return grouped
+
+def compute_totals_for_group(records):
+    """
+    Sums up the ordered and shipped quantities from a list of fulfillment records.
+    We first check if the record contains a "fulfillmentRequestItems" array.
+    If present, we sum each line item’s "quantity" and "shippedQuantity".
+    Otherwise, we fall back to the top-level "totalQuantity" and "shippedQuantity".
     """
     total_ordered = 0
     total_shipped = 0
-    desired_source_id = vendor_source_ids.get(vendor)
-    
-    for record in fulfillment_data:
-        # Check if record's sourceId matches our desired source id.
-        if record.get("sourceId") != desired_source_id:
-            continue
-        # Sum the top-level totals. (Adjust these keys if needed.)
-        total_ordered += record.get("totalQuantity", 0)
-        total_shipped += record.get("shippedQuantity", 0)
+    for record in records:
+        if "fulfillmentRequestItems" in record and isinstance(record["fulfillmentRequestItems"], list):
+            for item in record["fulfillmentRequestItems"]:
+                total_ordered += item.get("quantity", 0)
+                total_shipped += item.get("shippedQuantity", 0)
+        else:
+            total_ordered += record.get("totalQuantity", 0)
+            total_shipped += record.get("shippedQuantity", 0)
     return total_ordered, total_shipped
 
 def post_to_airtable(vendor, ordered, shipped, fill_rate, week_str):
     """
-    Pushes vendor data to Airtable. The Airtable table is assumed to have:
+    Pushes a record to Airtable. The Airtable table should have fields:
       - Vendor (single select)
       - Ordered QTY (number)
       - Shipped QTY (number)
-      - Fill Rate (percentage stored as a decimal, e.g. 0.9 for 90%)
+      - Fill Rate (decimal percentage)
       - Week (text)
     """
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{encoded_table_name}"
@@ -114,16 +132,21 @@ def post_to_airtable(vendor, ordered, shipped, fill_rate, week_str):
 
 def main():
     week_str = datetime.now().strftime("%Y-%m-%d")
-    fulfillment_data = get_fulfillment_data()
-    if not fulfillment_data:
+    data = get_fulfillment_data()
+    if not data:
         print("⚠️ No fulfillment data returned from Flxpoint.")
         return
-
-    for vendor in VENDORS:
-        ordered, shipped = compute_vendor_totals(fulfillment_data, vendor)
-        fill_rate = round(shipped / ordered, 4) if ordered > 0 else 0.0
-        print(f"→ {vendor}: Ordered = {ordered}, Shipped = {shipped}, Fill Rate = {fill_rate*100:.2f}%")
-        post_to_airtable(vendor, ordered, shipped, fill_rate, week_str)
+    
+    grouped_data = group_fulfillments_by_source(data)
+    
+    for source_id, records in grouped_data.items():
+        ordered, shipped = compute_totals_for_group(records)
+        fill_rate = round((shipped / ordered), 4) if ordered > 0 else 0.0
+        
+        # Look up a friendly vendor name if available; otherwise, use "Source {source_id}"
+        vendor_label = source_id_to_vendor.get(source_id, f"Source {source_id}")
+        print(f"→ {vendor_label}: Ordered = {ordered}, Shipped = {shipped}, Fill Rate = {fill_rate*100:.2f}%")
+        post_to_airtable(vendor_label, ordered, shipped, fill_rate, week_str)
 
 if __name__ == "__main__":
     main()
