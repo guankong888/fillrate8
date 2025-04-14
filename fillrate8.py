@@ -7,22 +7,23 @@ from urllib.parse import quote
 # Load environment variables from .env
 load_dotenv()
 
-# Airtable configuration
+# Airtable config – ensure table name is exactly as defined in Airtable
 AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
-encoded_table_name = quote(AIRTABLE_TABLE_NAME)  # URL-encode the table name
+encoded_table_name = quote(AIRTABLE_TABLE_NAME)
 
-# Flxpoint configuration (ensure your token has source-level permissions)
+# Flxpoint config – ensure this token has source-level permissions for fulfillment data
 FLXPOINT_API_TOKEN = os.getenv("FLXPOINT_API_TOKEN")
 
-# Vendors to track (as they appear in the Flxpoint data)
+# Vendors (source names exactly as expected)
 VENDORS = ["DNA", "Muscle Food"]
 
-def get_fulfillment_data():
+def get_fulfillment_data_for_vendor(vendor):
     """
-    Retrieves fulfillment requests from Flxpoint for the past 7 days.
-    We use the endpoint that returns all fulfillment requests and rely on manual filtering.
+    Retrieves fulfillment requests for a vendor over the past 7 days.
+    This call uses the query parameter "sourceName" so that the API returns
+    only the records for that vendor.
     """
     headers = {"X-API-TOKEN": FLXPOINT_API_TOKEN}
     today = datetime.utcnow()
@@ -30,61 +31,51 @@ def get_fulfillment_data():
     params = {
         "startDate": last_week.strftime("%Y-%m-%d"),
         "endDate": today.strftime("%Y-%m-%d"),
-        # Even if we pass a filter (e.g. "sourceName"), it appears the API returns all records.
-        "status": "Completed"
+        "status": "Completed",
+        "sourceName": vendor
     }
-    
     url = "https://api.flxpoint.com/fulfillment-requests"
-    print(f"\n📦 Requesting fulfillment data from {params['startDate']} to {params['endDate']}")
+    print(f"\n📦 Requesting fulfillment data for vendor: {vendor}")
     print("🔗 URL:", url)
     print("📤 Params:", params)
     
     response = requests.get(url, headers=headers, params=params)
-    print("🔄 Status Code:", response.status_code)
-    
+    print(f"🔄 Status Code ({vendor}):", response.status_code)
     if response.status_code != 200:
-        print("❌ Flxpoint API Error:", response.text)
-        return []
+        print(f"❌ Flxpoint API Error for {vendor}:", response.text)
+        return None
     
     try:
-        # Expecting an array/list of fulfillment request objects
-        data = response.json()
-        print("✅ Successfully parsed JSON response (total records:", len(data), ")")
+        data = response.json()  # Expecting an array (list) of records
+        print(f"✅ Successfully parsed JSON for {vendor} (records: {len(data)})")
     except Exception as e:
-        print("❌ Failed to parse JSON:", str(e))
-        print("🔍 Raw response:")
-        print(response.text)
-        return []
+        print(f"❌ Failed to parse JSON for {vendor}: {e}")
+        print("🔍 Raw response:", response.text)
+        return None
     
     return data
 
-def compute_vendor_totals(fulfillment_data, vendor):
+def compute_vendor_totals(fulfillment_data):
     """
-    Filter the list of fulfillment requests to only those for the given vendor (by checking the 'sourceName' key)
-    and sum their ordered and shipped quantities.
-    
-    We assume each fulfillment record includes:
-      - "totalQuantity": the ordered quantity for that request
-      - "shippedQuantity": the units actually shipped
+    Given a list of fulfillment request records, sum the ordered and shipped quantities.
+    We assume each record contains:
+      - "totalQuantity": total units ordered in that request
+      - "shippedQuantity": units actually shipped
     """
     total_ordered = 0
     total_shipped = 0
     for record in fulfillment_data:
-        # Check the sourceName (if the API returns it; adjust if your field name is different)
-        if record.get("sourceName") != vendor:
-            continue
         total_ordered += record.get("totalQuantity", 0)
         total_shipped += record.get("shippedQuantity", 0)
     return total_ordered, total_shipped
 
 def post_to_airtable(vendor, ordered, shipped, fill_rate, week_str):
     """
-    Pushes the vendor's fill rate data to Airtable.
-    Expected Airtable fields:
+    Pushes a record to Airtable. The table is expected to have these columns:
       - Vendor (single select)
       - Ordered QTY (number)
       - Shipped QTY (number)
-      - Fill Rate (percentage, expressed as a decimal, e.g. 0.9 for 90%)
+      - Fill Rate (percentage as a decimal; e.g., 0.9 for 90%)
       - Week (single line text)
     """
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{encoded_table_name}"
@@ -105,6 +96,7 @@ def post_to_airtable(vendor, ordered, shipped, fill_rate, week_str):
             }
         ]
     }
+    
     response = requests.post(url, headers=headers, json=data)
     if response.status_code == 200:
         print(f"✅ Pushed to Airtable for {vendor}")
@@ -113,16 +105,14 @@ def post_to_airtable(vendor, ordered, shipped, fill_rate, week_str):
 
 def main():
     week_str = datetime.now().strftime("%Y-%m-%d")
-    fulfillment_data = get_fulfillment_data()
-    
-    if not fulfillment_data:
-        print("⚠️ No fulfillment data returned from Flxpoint.")
-        return
-    
     for vendor in VENDORS:
-        ordered, shipped = compute_vendor_totals(fulfillment_data, vendor)
+        fulfillment_data = get_fulfillment_data_for_vendor(vendor)
+        if fulfillment_data is None:
+            print(f"⚠️ No fulfillment data returned for {vendor}")
+            continue
+        ordered, shipped = compute_vendor_totals(fulfillment_data)
         fill_rate = round(shipped / ordered, 4) if ordered > 0 else 0.0
-        print(f"→ {vendor}: Ordered = {ordered}, Shipped = {shipped}, Fill Rate = {fill_rate * 100:.2f}%")
+        print(f"→ {vendor}: Ordered = {ordered}, Shipped = {shipped}, Fill Rate = {fill_rate*100:.2f}%")
         post_to_airtable(vendor, ordered, shipped, fill_rate, week_str)
 
 if __name__ == "__main__":
