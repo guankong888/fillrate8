@@ -30,7 +30,9 @@ def get_flxpoint_fill_rates():
     }
 
     print(f"\n📅 Getting orders from {last_week.date()} to {today.date()}")
-    url = "https://api.flxpoint.com/api/v2/orders"
+    url = "https://app.flxpoint.com/api/v2/order"  # ✅ corrected endpoint
+
+    print("🔗 Requesting:", url)
     response = requests.get(url, headers=headers, params=params)
 
     if response.status_code != 200:
