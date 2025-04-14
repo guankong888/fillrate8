@@ -1,16 +1,41 @@
 import os
 from dotenv import load_dotenv
-from utils.airtable_client import upsert_fill_rate
+import requests
 
-load_dotenv()  # Load .env credentials
+# Load environment variables from .env
+load_dotenv()
 
-# Sample test data
-vendor = "MF"
-ordered_qty = 200
-shipped_qty = 180
-fill_rate = 0.9  # 90%
-week_str = "2025-04-07"
+AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
+AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
+AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
 
-# Push to Airtable
-response = upsert_fill_rate(vendor, ordered_qty, shipped_qty, fill_rate, week_str)
-print("✅ Airtable push successful:", response)
+# Define test data
+data = {
+    "records": [
+        {
+            "fields": {
+                "Vendor": "MF",
+                "Ordered QTY": 300,
+                "Shipped QTY": 270,
+                "% Fill Rate": 0.9,  # Airtable will show as 90% if field is percent
+                "Week": "2025-04-07"
+            }
+        }
+    ]
+}
+
+# Build Airtable API request
+url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
+headers = {
+    "Authorization": f"Bearer {AIRTABLE_TOKEN}",
+    "Content-Type": "application/json"
+}
+
+# Send the request
+response = requests.post(url, headers=headers, json=data)
+
+# Handle result
+if response.status_code == 200:
+    print("✅ Airtable push successful:", response.json())
+else:
+    print("❌ Error:", response.status_code, response.text)
