@@ -38,7 +38,7 @@ def get_fill_rates_by_source():
             "source": vendor
         }
 
-        url = "https://api.flxpoint.com/api/v2/source/fulfillments"
+        url = "https://api.flxpoint.com/api/v2/source/fulfillment"
         response = requests.get(url, headers=headers, params=params)
 
         print(f"🔄 Status Code ({vendor}):", response.status_code)
