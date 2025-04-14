@@ -5,21 +5,21 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from urllib.parse import quote
 
-# Load .env
+# Load .env variables
 load_dotenv()
 
-# Airtable Config
+# Airtable config
 AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
 encoded_table_name = quote(AIRTABLE_TABLE_NAME)
 
-# Flxpoint Config
+# Flxpoint config
 FLXPOINT_API_TOKEN = os.getenv("FLXPOINT_API_TOKEN")
 
 
 def get_flxpoint_fill_rates():
-    headers = { "X-API-TOKEN": FLXPOINT_API_TOKEN }
+    headers = {"X-API-TOKEN": FLXPOINT_API_TOKEN}
 
     today = datetime.utcnow()
     last_week = today - timedelta(days=7)
@@ -30,7 +30,7 @@ def get_flxpoint_fill_rates():
     }
 
     print(f"\n📅 Getting orders from {last_week.date()} to {today.date()}")
-    url = "https://app.flxpoint.com/api/v2/order"  # ✅ corrected endpoint
+    url = "https://api.flxpoint.com/api/v2/order"  # ✅ Correct backend API
     print("🔗 Requesting:", url)
     print("📤 Params:", params)
 
