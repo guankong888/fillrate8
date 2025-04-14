@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from urllib.parse import quote
 
-# Load .env variables
+# Load environment variables
 load_dotenv()
 
 # Airtable config
@@ -17,53 +17,54 @@ encoded_table_name = quote(AIRTABLE_TABLE_NAME)
 # Flxpoint config
 FLXPOINT_API_TOKEN = os.getenv("FLXPOINT_API_TOKEN")
 
+# Source names
+VENDORS = ["DNA", "Muscle Food"]
 
-def get_flxpoint_fill_rates():
+
+def get_fill_rates_by_source():
     headers = {"X-API-TOKEN": FLXPOINT_API_TOKEN}
 
     today = datetime.utcnow()
     last_week = today - timedelta(days=7)
 
-    params = {
-        "startDate": last_week.strftime("%Y-%m-%d"),
-        "endDate": today.strftime("%Y-%m-%d")
-    }
-
-    print(f"\n📅 Getting orders from {last_week.date()} to {today.date()}")
-    url = "https://api.flxpoint.com/api/v2/fulfillment"  # ✅ Correct backend API
-    print("🔗 Requesting:", url)
-    print("📤 Params:", params)
-
-    response = requests.get(url, headers=headers, params=params)
-    print("🔄 Status Code:", response.status_code)
-
-    if response.status_code != 200:
-        print("❌ Flxpoint Error")
-        print(response.text)
-        return {}
-
-    try:
-        json_data = response.json()
-        print("✅ Successfully parsed JSON response")
-    except Exception as e:
-        print("❌ Failed to parse JSON:", str(e))
-        print("🔍 Raw response:")
-        print(response.text)
-        return {}
-
-    orders = json_data.get("data", [])
-    if not orders:
-        print("⚠️ No orders returned from Flxpoint.")
-        return {}
-
     vendor_totals = defaultdict(lambda: {"ordered": 0, "shipped": 0})
-    for order in orders:
-        vendor = order.get("source", {}).get("name", "UNKNOWN")
-        for item in order.get("line_items", []):
-            qty = item.get("quantity", 0)
-            shipped = item.get("shipped_quantity", 0)
-            vendor_totals[vendor]["ordered"] += qty
-            vendor_totals[vendor]["shipped"] += shipped
+
+    for vendor in VENDORS:
+        print(f"\n📦 Pulling fulfillments for vendor: {vendor}")
+
+        params = {
+            "startDate": last_week.strftime("%Y-%m-%d"),
+            "endDate": today.strftime("%Y-%m-%d"),
+            "source": vendor
+        }
+
+        url = "https://api.flxpoint.com/api/v2/source/fulfillments"
+        response = requests.get(url, headers=headers, params=params)
+
+        print(f"🔄 Status Code ({vendor}):", response.status_code)
+
+        if response.status_code != 200:
+            print(f"❌ Flxpoint Error for {vendor}")
+            print(response.text)
+            continue
+
+        try:
+            fulfillments = response.json().get("data", [])
+        except Exception as e:
+            print(f"❌ Failed to decode JSON for {vendor}: {str(e)}")
+            print(response.text)
+            continue
+
+        if not fulfillments:
+            print(f"⚠️ No fulfillments found for {vendor}")
+            continue
+
+        for fulfillment in fulfillments:
+            for item in fulfillment.get("line_items", []):
+                requested = item.get("quantity", 0)
+                shipped = item.get("shipped_quantity", 0)
+                vendor_totals[vendor]["ordered"] += requested
+                vendor_totals[vendor]["shipped"] += shipped
 
     return vendor_totals
 
@@ -98,7 +99,7 @@ def post_to_airtable(vendor, ordered, shipped, fill_rate, week_str):
 
 
 def main():
-    vendor_totals = get_flxpoint_fill_rates()
+    vendor_totals = get_fill_rates_by_source()
     if not vendor_totals:
         print("⚠️ No data returned from Flxpoint.")
         return
