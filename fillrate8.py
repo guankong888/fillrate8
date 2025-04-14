@@ -5,74 +5,90 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from urllib.parse import quote
 
-# Load environment variables
+# Load environment variables from .env
 load_dotenv()
 
 # Airtable config
 AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
-encoded_table_name = quote(AIRTABLE_TABLE_NAME)
+encoded_table_name = quote(AIRTABLE_TABLE_NAME)  # URL-encode the table name in case it contains spaces
 
 # Flxpoint config
 FLXPOINT_API_TOKEN = os.getenv("FLXPOINT_API_TOKEN")
 
-# Vendors to track (Source names exactly as in Flxpoint)
+# Vendors to track – exactly as they appear in Flxpoint
 VENDORS = ["DNA", "Muscle Food"]
 
-def get_fill_rates_from_source_orders():
-    headers = { "X-API-TOKEN": FLXPOINT_API_TOKEN }
-
+def get_fulfillment_data_for_vendor(vendor):
+    """
+    Calls Flxpoint's v2 API to retrieve fulfillment requests for a given vendor.
+    (This endpoint is assumed to be 'GET /fulfillment-requests' and supports filtering by sourceName and status.)
+    """
+    headers = {"X-API-TOKEN": FLXPOINT_API_TOKEN}
     today = datetime.utcnow()
     last_week = today - timedelta(days=7)
-
     params = {
         "startDate": last_week.strftime("%Y-%m-%d"),
-        "endDate": today.strftime("%Y-%m-%d")
-        # We’re not filtering by source here via URL parameters;
-        # we will filter the returned data in the script.
+        "endDate": today.strftime("%Y-%m-%d"),
+        "sourceName": vendor,
+        "status": "Completed"  # Adjust status filter as needed
     }
-
-    # NEW ENDPOINT for sources – note the plural "orders" after "source"
-    url = "https://api.flxpoint.com/api/v2/source/orders"
-    print(f"\n📦 Requesting Flxpoint orders from {params['startDate']} to {params['endDate']}")
-    print("🔗 Requesting:", url)
+    # The correct endpoint based on Flxpoint v2 docs for fulfillment data is assumed to be below.
+    url = "https://api.flxpoint.com/fulfillment-requests"
+    print(f"\n📦 Requesting fulfillment data for vendor: {vendor}")
+    print("🔗 URL:", url)
     print("📤 Params:", params)
-
+    
     response = requests.get(url, headers=headers, params=params)
     print("🔄 Status Code:", response.status_code)
-
+    
     if response.status_code != 200:
-        print("❌ Flxpoint API Error:", response.text)
-        return {}
-
+        print(f"❌ Flxpoint API Error for {vendor}:", response.text)
+        return None
+    
     try:
-        orders = response.json().get("data", [])
-        print("✅ Successfully parsed JSON response")
+        data = response.json().get("data", [])
+        print(f"✅ Successfully parsed JSON for {vendor}")
     except Exception as e:
-        print("❌ Failed to parse JSON:", str(e))
-        print("🔍 Raw response:")
-        print(response.text)
-        return {}
+        print(f"❌ JSON parse error for {vendor}: {e}")
+        print("🔍 Raw response:", response.text)
+        return None
+    return data
 
-    vendor_totals = defaultdict(lambda: {"ordered": 0, "shipped": 0})
-
-    # Filter orders for our vendors by source.name
-    for order in orders:
-        source_name = order.get("source", {}).get("name", "UNKNOWN")
-        if source_name not in VENDORS:
-            continue
-
-        # Assume each order has a list of line_items
-        for item in order.get("line_items", []):
-            ordered = item.get("quantity", 0)
-            shipped = item.get("shipped_quantity", 0)
-            vendor_totals[source_name]["ordered"] += ordered
-            vendor_totals[source_name]["shipped"] += shipped
-
-    return vendor_totals
+def compute_vendor_totals(fulfillment_data):
+    """
+    Loops through the returned fulfillment requests and aggregates ordered and shipped quantities.
+    
+    Expected JSON structure per fulfillment request (simplified):
+    {
+       "id": ...,
+       "sourceName": "DNA",
+       "lineItems": [
+           { "sku": "...", "quantity": 10, "quantityShipped": 9 },
+           { ... }
+       ],
+       ... other fields ...
+    }
+    """
+    total_ordered = 0
+    total_shipped = 0
+    for fulfillment in fulfillment_data:
+        line_items = fulfillment.get("lineItems", [])
+        for item in line_items:
+            total_ordered += item.get("quantity", 0)
+            total_shipped += item.get("quantityShipped", 0)
+    return total_ordered, total_shipped
 
 def post_to_airtable(vendor, ordered, shipped, fill_rate, week_str):
+    """
+    Pushes the vendor's fill rate data to Airtable. The table is expected to have these columns:
+      - Vendor (single select)
+      - Ordered QTY (number)
+      - Shipped QTY (number)
+      - Fill Rate (percentage; value expressed as 0.0–1.0)
+      - Week (single line text)
+    """
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{encoded_table_name}"
     headers = {
         "Authorization": f"Bearer {AIRTABLE_TOKEN}",
@@ -91,6 +107,7 @@ def post_to_airtable(vendor, ordered, shipped, fill_rate, week_str):
             }
         ]
     }
+    
     response = requests.post(url, headers=headers, json=data)
     if response.status_code == 200:
         print(f"✅ Pushed to Airtable for {vendor}")
@@ -98,19 +115,25 @@ def post_to_airtable(vendor, ordered, shipped, fill_rate, week_str):
         print(f"❌ Airtable Error for {vendor}:", response.status_code, response.text)
 
 def main():
-    vendor_totals = get_fill_rates_from_source_orders()
-    if not vendor_totals:
-        print("⚠️ No data returned from Flxpoint.")
-        return
-
     week_str = datetime.now().strftime("%Y-%m-%d")
-    print("\n📊 Fill Rate Summary:")
-    for vendor, stats in vendor_totals.items():
-        ordered = stats["ordered"]
-        shipped = stats["shipped"]
+    overall_totals = {}
+    
+    # Iterate through each vendor, retrieve fulfillment data, and compute totals.
+    for vendor in VENDORS:
+        fulfillment_data = get_fulfillment_data_for_vendor(vendor)
+        if not fulfillment_data:
+            print(f"⚠️ No fulfillment data returned for {vendor}")
+            continue
+        
+        ordered, shipped = compute_vendor_totals(fulfillment_data)
         fill_rate = round(shipped / ordered, 4) if ordered else 0.0
-        print(f"→ {vendor}: {shipped}/{ordered} shipped → {fill_rate * 100:.2f}%")
+        overall_totals[vendor] = {"ordered": ordered, "shipped": shipped, "fill_rate": fill_rate}
+        
+        print(f"→ {vendor}: Ordered = {ordered}, Shipped = {shipped}, Fill Rate = {fill_rate * 100:.2f}%")
         post_to_airtable(vendor, ordered, shipped, fill_rate, week_str)
+    
+    if not overall_totals:
+        print("⚠️ No vendor data collected.")
 
 if __name__ == "__main__":
     main()
