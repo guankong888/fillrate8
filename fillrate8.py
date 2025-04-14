@@ -16,7 +16,7 @@ headers = {
     "Content-Type": "application/json"
 }
 
-# Define test data
+# ✅ Use correct field names here:
 data = {
     "records": [
         {
@@ -24,7 +24,7 @@ data = {
                 "Vendor": "MF",
                 "Ordered QTY": 300,
                 "Shipped QTY": 270,
-                "% Fill Rate": 0.9,
+                "Fill Rate": 0.9,     # Airtable shows 90%
                 "Week": "2025-04-07"
             }
         }
