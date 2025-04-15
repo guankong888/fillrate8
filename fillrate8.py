@@ -21,7 +21,7 @@ FLXPOINT_API_TOKEN = os.getenv("FLXPOINT_API_TOKEN")
 if not FLXPOINT_API_TOKEN:
     raise ValueError("❌ Missing FLXPOINT_API_TOKEN in environment variables.")
 
-# Optional mapping for known vendor source IDs
+# Optional vendor name mapping
 source_id_to_vendor = {
     210740: "Muscle Food",
     992648: "DNA",
@@ -41,8 +41,6 @@ def get_fulfillment_data():
 
     while True:
         params = {
-            "startDate": last_week.strftime("%Y-%m-%d"),
-            "endDate": today.strftime("%Y-%m-%d"),
             "limit": limit,
             "offset": offset
         }
@@ -61,13 +59,22 @@ def get_fulfillment_data():
                 break
 
             print(f"✅ Page {page_count} returned {len(page_data)} records")
-            if not page_data:
-                break
 
-            all_data.extend(page_data)
+            for record in page_data:
+                sent_at_str = record.get("sentAt")
+                if not sent_at_str:
+                    continue
+                try:
+                    sent_at = datetime.strptime(sent_at_str, "%Y-%m-%dT%H:%M:%S.%fZ")
+                    if last_week <= sent_at <= today:
+                        all_data.append(record)
+                    else:
+                        print(f"⏭️ Skipped old record: {record.get('fulfillmentRequestNumber')} (sentAt: {sent_at_str})")
+                except Exception as e:
+                    print(f"⚠️ Failed to parse sentAt on record {record.get('fulfillmentRequestNumber')}: {e}")
 
             if len(page_data) < limit:
-                break  # Last page
+                break
             offset += limit
             page_count += 1
 
@@ -76,13 +83,13 @@ def get_fulfillment_data():
             print("🔍 Raw response:", response.text)
             break
 
-    print(f"\n📦 Total records fetched: {len(all_data)}")
+    print(f"\n📦 Total valid records fetched: {len(all_data)}")
 
     if all_data:
         print("\n🧾 Sample record for inspection:")
         print(json.dumps(all_data[0], indent=2)[:2000])
     else:
-        print("⚠️ No fulfillment data found.")
+        print("⚠️ No valid fulfillment data found.")
 
     return all_data
 
