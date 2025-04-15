@@ -21,13 +21,11 @@ FLXPOINT_API_TOKEN = os.getenv("FLXPOINT_API_TOKEN")
 if not FLXPOINT_API_TOKEN:
     raise ValueError("❌ Missing FLXPOINT_API_TOKEN in environment variables.")
 
-# Allowed source IDs
-ALLOWED_SOURCE_IDS = {210740, 992648}
-
-# Map sourceId to vendor label
+# Optional mapping for known vendor source IDs
 source_id_to_vendor = {
     210740: "Muscle Food",
-    992648: "DNA"
+    992648: "DNA",
+    212291: "N2G Water"
 }
 
 def get_fulfillment_data():
@@ -35,49 +33,43 @@ def get_fulfillment_data():
     today = datetime.utcnow()
     last_week = today - timedelta(days=7)
     base_url = "https://api.flxpoint.com/fulfillment-requests"
-    params = {
-        "startDate": last_week.strftime("%Y-%m-%d"),
-        "endDate": today.strftime("%Y-%m-%d")
-    }
 
-    all_data = []
-    current_url = base_url
-    current_params = params
+    limit = 100
+    offset = 0
     page_count = 1
+    all_data = []
 
     while True:
-        print(f"\n📦 Requesting page {page_count}")
-        response = requests.get(current_url, headers=headers, params=current_params)
+        params = {
+            "startDate": last_week.strftime("%Y-%m-%d"),
+            "endDate": today.strftime("%Y-%m-%d"),
+            "limit": limit,
+            "offset": offset
+        }
+        print(f"\n📦 Requesting page {page_count} (offset={offset})")
+        response = requests.get(base_url, headers=headers, params=params)
+
         if response.status_code != 200:
             print("❌ Flxpoint API Error:", response.text)
             break
 
         try:
-            result = response.json()
-            if isinstance(result, dict) and "data" in result:
-                records = result["data"]
-            elif isinstance(result, list):
-                records = result
-            else:
-                print(f"❌ Unexpected response format: {type(result)}")
-                print(json.dumps(result, indent=2)[:1000])
+            page_data = response.json()
+            if not isinstance(page_data, list):
+                print("❌ Unexpected response format (expected list)")
+                print(json.dumps(page_data, indent=2)[:1000])
                 break
 
-            print(f"✅ Page {page_count} returned {len(records)} records")
-            if not records:
-                print("⚠️ No more records found. Exiting.")
+            print(f"✅ Page {page_count} returned {len(page_data)} records")
+            if not page_data:
                 break
 
-            all_data.extend(records)
+            all_data.extend(page_data)
 
-            # Check for next page
-            next_url = result.get("next")
-            if next_url:
-                current_url = next_url
-                current_params = {}
-                page_count += 1
-            else:
-                break
+            if len(page_data) < limit:
+                break  # Last page
+            offset += limit
+            page_count += 1
 
         except Exception as e:
             print("❌ Failed to parse JSON:", e)
@@ -102,11 +94,8 @@ def group_fulfillments_by_source(data):
         if not src_id:
             print(f"⚠️ Missing sourceId on ticket {ticket}")
             continue
-        if src_id not in ALLOWED_SOURCE_IDS:
-            print(f"⛔ Excluded sourceId {src_id} on ticket {ticket}")
-            continue
         groups.setdefault(src_id, []).append(record)
-    print(f"🗂 Grouped records by source: {list(groups.keys())}")
+    print(f"🗂 Grouped records by source ID: {list(groups.keys())}")
     return groups
 
 def compute_totals_for_group(records):
