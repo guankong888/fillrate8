@@ -21,10 +21,10 @@ FLXPOINT_API_TOKEN = os.getenv("FLXPOINT_API_TOKEN")
 if not FLXPOINT_API_TOKEN:
     raise ValueError("❌ Missing FLXPOINT_API_TOKEN in environment variables.")
 
-# Allowed source IDs (adjust these to control which vendors you care about)
+# Allowed source IDs
 ALLOWED_SOURCE_IDS = {210740, 992648}
 
-# Mapping sourceId to vendor name (update as needed)
+# Map sourceId to vendor label
 source_id_to_vendor = {
     210740: "Muscle Food",
     992648: "DNA"
@@ -41,29 +41,44 @@ def get_fulfillment_data():
     }
 
     all_data = []
-    page = 1
+    current_url = base_url
+    current_params = params
+    page_count = 1
+
     while True:
-        print(f"\n📦 Requesting page {page} of fulfillment data")
-        response = requests.get(base_url, headers=headers, params=params)
+        print(f"\n📦 Requesting page {page_count}")
+        response = requests.get(current_url, headers=headers, params=current_params)
         if response.status_code != 200:
             print("❌ Flxpoint API Error:", response.text)
             break
 
         try:
-            page_data = response.json()
-            if not page_data:
-                print(f"✅ All records fetched. Total pages: {page - 1}")
-                break
-
-            print(f"✅ Page {page} returned {len(page_data)} records")
-            all_data.extend(page_data)
-
-            # Simulate pagination if not provided by Flxpoint
-            if len(page_data) < 20:
-                break
+            result = response.json()
+            if isinstance(result, dict) and "data" in result:
+                records = result["data"]
+            elif isinstance(result, list):
+                records = result
             else:
-                page += 1
-                params["page"] = page
+                print(f"❌ Unexpected response format: {type(result)}")
+                print(json.dumps(result, indent=2)[:1000])
+                break
+
+            print(f"✅ Page {page_count} returned {len(records)} records")
+            if not records:
+                print("⚠️ No more records found. Exiting.")
+                break
+
+            all_data.extend(records)
+
+            # Check for next page
+            next_url = result.get("next")
+            if next_url:
+                current_url = next_url
+                current_params = {}
+                page_count += 1
+            else:
+                break
+
         except Exception as e:
             print("❌ Failed to parse JSON:", e)
             print("🔍 Raw response:", response.text)
@@ -73,7 +88,7 @@ def get_fulfillment_data():
 
     if all_data:
         print("\n🧾 Sample record for inspection:")
-        print(json.dumps(all_data[0], indent=2)[:1000])
+        print(json.dumps(all_data[0], indent=2)[:2000])
     else:
         print("⚠️ No fulfillment data found.")
 
