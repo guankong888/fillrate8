@@ -35,3 +35,44 @@ if response.status_code == 200:
     # Add logic here to parse/export orders if needed
 else:
     print("Error fetching orders:", response.status_code, response.text)
+
+import csv
+import os
+
+# Set your output path and file name
+output_path = os.path.join(os.getcwd(), "flxpoint_orders_export.csv")
+
+# Flattened list of orders with line items
+rows = []
+
+for order in orders:
+    order_number = order.get("orderNumber")
+    order_date = order.get("orderedAt")
+    status = order.get("status")
+    channel = order.get("channel", {}).get("name")
+
+    for line in order.get("lineItems", []):
+        sku = line.get("sku")
+        title = line.get("title")
+        quantity = line.get("quantityOrdered")
+        rows.append({
+            "Order Number": order_number,
+            "Order Date": order_date,
+            "Status": status,
+            "Channel": channel,
+            "SKU": sku,
+            "Title": title,
+            "Qty Ordered": quantity
+        })
+
+# Define headers
+headers = ["Order Number", "Order Date", "Status", "Channel", "SKU", "Title", "Qty Ordered"]
+
+# Write to CSV
+with open(output_path, mode="w", newline="", encoding="utf-8") as file:
+    writer = csv.DictWriter(file, fieldnames=headers)
+    writer.writeheader()
+    writer.writerows(rows)
+
+print(f"✅ CSV export complete: {output_path}")
+
