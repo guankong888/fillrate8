@@ -21,7 +21,7 @@ headers = {
 
 # Params
 params = {
-    "pageSize": 1000,
+    "pageSize": 100,
     "orderedAfter": get_monday_1201_mtn_to_utc()
 }
 
